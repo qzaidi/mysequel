@@ -5,8 +5,178 @@ var sql = require('sql');
 var url = require('url');
 var debug = require('debug')('mysequel'); // TODO: replace with bunyan
 
+var queryMethods = [
+                     'select', 'from', 'insert', 'update',
+                     'delete', 'create', 'drop', 'alter', 
+                     'where', 'indexes'];
+
 module.exports = function (opt) {
-  var dialect = url.parse(opt.url).protocol;
-  dialect = dialect.substr(0, dialect.length - 1);
+  var pool;
+  var urlOpts = url.parse(opt.url);
+  var auth = urlOpts.auth.split(':');
+  var self = {};
   sql.setDialect('mysql');
+
+  if (urlOpts.protocol != 'mysql:') {
+    console.error('invalid dialect ' + urlOpts.protocol + ' in ' + opt.url);
+  }
+
+  self.open = function() {
+    if (pool) {
+      return;
+    }
+
+    debug('creating pool with ' + opt.connections.max + ' connections');
+    pool  = mysql.createPool({
+      connectionLimit : opt.connections.max || 10,
+      host            : urlOpts.hostname,
+      user            : auth[0],
+      password        : auth[1],
+      port            : urlOpts.port || 3306,
+      database        : urlOpts.path.substring(1)
+    });
+  };
+
+  self.open();
+
+  self.models = {};
+
+  function extendedQuery(query) {
+    var extQuery = Object.create(query);
+    var self = extQuery;
+
+    self.__extQuery = true;
+
+    extQuery.execWithin = function (where, fn) {
+      var query = self.toQuery(); // {text, params}
+      debug(query.text,query.values);
+      if (!fn) {
+        return where.query(query.text, query.values);
+      }
+      return where.query(query.text, query.values, function (err, res) {
+        debug('responded to ' + query.text);
+        var rows;
+        if (err) {
+          err = new Error(err);
+          err.message = 'SQL' + err.message + '\n' + query.text 
+          + '\n' + query.values;
+        }
+        rows = res?res.rows:null;
+        fn(err, rows && rows.length ? res.rows.map(normalizer) : rows);
+      });
+    };
+
+    extQuery.exec = extQuery.execWithin.bind(extQuery, pool);
+
+    extQuery.all = extQuery.exec;
+
+    extQuery.get = function (fn) {
+      return this.exec(function (err, rows) {
+        return fn(err, rows && rows.length ? rows[0] : null);
+      });
+    };
+
+    /**
+    * Returns a result from a query, mapping it to an object by a specified key.
+    * @param {!String} keyColumn the column to use as a key for the map.
+    * @param {!Function} callback called when the operation ends. Takes an error and the result.
+    * @param {String|Array|Function=} mapper can be:<ul>
+    *     <li>the name of the column to use as a value;</li>
+    *     <li>an array of column names. The value will be an object with the property names from this array mapped to the
+    *         column values from the array;</li>
+    *     <li>a function that takes the row as an argument and returns a value.</li>
+    *  </ul>
+    *                                        If omitted, assumes all other columns are values. If there is only one
+    *                                        other column, its value will be used for the object. Otherwise, the
+    *                                        value will be an object with the values mapped to column names.
+    * @param {Function=} filter takes a row and returns a value indicating whether the row should be inserted in the
+    *                           result.
+    */
+    extQuery.allObject = function(keyColumn, callback, mapper, filter) {
+      filter = filter || function() { return true; };
+
+      if (mapper) {
+        if (typeof mapper === 'string') {
+          var str = mapper;
+          mapper = function(row) { return row[str]; };
+        } else if (typeof mapper === 'object') {
+          var arr = mapper;
+          mapper = function(row) {
+            var obj = {};
+            var j;
+            for (j = 0; j < arr.length; j++) {
+              obj[arr[j]] = row[arr[j]];
+            }
+            return obj;
+          };
+        }
+      } else mapper = function(row) {
+        var validKeys = Object.keys(row).filter(function(key) { return key != keyColumn; });
+
+        if (validKeys.length == 0) return null;
+        else if (validKeys.length == 1) return row[validKeys[0]];
+        else {
+          var obj = {};
+          var j;
+          for (j = 0; j < validKeys.length; j++) obj[validKeys[j]] = row[validKeys[j]];
+          return obj;
+        }
+      };
+
+      return this.exec(function(err, data) {
+        if (err) return callback(err);
+
+        var result = {};
+        var i;
+        for (i = 0; i < data.length; i++) {
+          if (filter(data[i])) {
+            result[data[i][keyColumn]] = mapper(data[i]);
+          }
+        }
+
+        callback(null, result);
+      });
+    };
+
+    queryMethods.forEach(function (key) {
+      extQuery[key] = function () {
+        var q = query[key].apply(query, arguments);
+        if (q.__extQuery) return q;
+        return extendedQuery(q);
+      }
+    });
+
+    return extQuery;
+  }
+
+  function extendedTable(table) {
+    // inherit everything from a regular table.
+    var extTable = Object.create(table); 
+
+    // make query methods return extended queries.
+    queryMethods.forEach(function (key) {
+      extTable[key] = function () {
+        return extendedQuery(table[key].apply(table, arguments));
+      };
+    });
+
+
+    // make as return extended tables.
+    extTable.as = function () {
+      return extendedTable(table.as.apply(table, arguments));
+    };
+    return extTable;
+  }
+
+
+  self.define = function (opt) {
+    var t = extendedTable(sql.define.apply(sql, arguments));
+    self.models[opt.name] = t;
+    return t;
+  };
+
+  self.functions = sql.functions;
+
+  return self;
+
 };
