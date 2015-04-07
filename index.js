@@ -10,12 +10,30 @@ var queryMethods = [
                      'delete', 'create', 'drop', 'alter', 
                      'where', 'indexes'];
 
+var normalizer = function (row) {
+  var res = {};
+  Object.keys(row).forEach(function(key) {
+    var path = key.split('.'), plen = path.length, k, item, obj;
+    for (k = 0, obj = res; k < plen - 1; ++k) {
+      item = path[k];
+      if (!obj[item]) {
+        obj[item] = {};
+      }
+      obj = obj[item];
+    }
+    item = path[plen - 1];
+    obj[item] = row[key];
+    });
+  return res;
+}
+
 module.exports = function (opt) {
   var pool;
   var urlOpts = url.parse(opt.url);
   var auth = urlOpts.auth.split(':');
   var self = {};
   sql.setDialect('mysql');
+  var timeout = opt.timeout || 60000;
 
   if (urlOpts.protocol != 'mysql:') {
     console.error('invalid dialect ' + urlOpts.protocol + ' in ' + opt.url);
@@ -47,13 +65,13 @@ module.exports = function (opt) {
 
     self.__extQuery = true;
 
-    extQuery.execWithin = function (where, fn) {
+    extQuery.execWithin = function (where, nested, fn) {
       var query = self.toQuery(); // {text, params}
       debug(query.text,query.values);
       if (!fn) {
-        return where.query(query.text, query.values);
+        return where.query({ sql: query.text, timeout: opt.timeout, nestTables: nested }, query.values);
       }
-      return where.query(query.text, query.values, function (err, res) {
+      return where.query({ sql: query.text, timeout: opt.timeout, nestTables: nested }, query.values, function (err, res) {
         debug('responded to ' + query.text);
         var rows;
         if (err) {
@@ -61,12 +79,13 @@ module.exports = function (opt) {
           err.message = 'SQL' + err.message + '\n' + query.text 
           + '\n' + query.values;
         }
-        rows = res?res.rows:null;
-        fn(err, rows && rows.length ? res.rows.map(normalizer) : rows);
+        rows = res;
+        fn(err, rows && rows.length && nested ? rows.map(normalizer) : rows);
       });
     };
 
-    extQuery.exec = extQuery.execWithin.bind(extQuery, pool);
+    extQuery.exec = extQuery.execWithin.bind(extQuery, pool, false);
+    extQuery.execNested = extQuery.execWithin.bind(extQuery, pool, '.' );
 
     extQuery.all = extQuery.exec;
 
