@@ -65,18 +65,18 @@ module.exports = function (opt) {
 
     self.__extQuery = true;
 
-    extQuery.execWithin = function (where, nested, fn) {
+    extQuery.execWithin = function (where, nested, appended, fn) {
       var query = self.toQuery(); // {text, params}
       debug(query.text,query.values);
       if (!fn) {
-        return where.query({ sql: query.text, timeout: opt.timeout, nestTables: nested }, query.values);
+        return where.query({ sql: query.text + appended, timeout: opt.timeout, nestTables: nested }, query.values);
       }
-      return where.query({ sql: query.text, timeout: opt.timeout, nestTables: nested }, query.values, function (err, res) {
+      return where.query({ sql: query.text + appended, timeout: opt.timeout, nestTables: nested }, query.values, function (err, res) {
         debug('responded to ' + query.text);
         var rows;
         if (err) {
           err = new Error(err);
-          err.message = 'SQL' + err.message + '\n' + query.text 
+          err.message = 'SQL' + err.message + '\n' + query.text  + appended
           + '\n' + query.values;
         }
         rows = res;
@@ -84,8 +84,8 @@ module.exports = function (opt) {
       });
     };
 
-    extQuery.exec = extQuery.execWithin.bind(extQuery, pool, false);
-    extQuery.execNested = extQuery.execWithin.bind(extQuery, pool, '.' );
+    extQuery.exec = extQuery.execWithin.bind(extQuery, pool, false, '');
+    extQuery.execNested = extQuery.execWithin.bind(extQuery, pool, '.','');
 
     extQuery.all = extQuery.exec;
 
@@ -195,6 +195,9 @@ module.exports = function (opt) {
   };
 
   self.functions = sql.functions;
+
+  self.query = pool.query.bind(pool);
+
 
   return self;
 
