@@ -3,7 +3,7 @@
 var mysql = require('mysql');
 var sql = require('sql');
 var url = require('url');
-var debug = require('debug')('mysequel'); // TODO: replace with bunyan
+var debug = require('debug')('mysequel');
 
 var queryMethods = [
                      'select', 'from', 'insert', 'update',
@@ -197,8 +197,43 @@ module.exports = function (opt) {
   self.functions = sql.functions;
 
   self.query = pool.query.bind(pool);
+  self.getConnection = pool.getConnection.bind(pool)
 
+  var msql_enqueuedSince = undefined;
+  pool.on('enqueue', function () {
+    debug('Waiting for available connection slot max = ' + opt.connections.max, msql_enqueuedSince|0);
+    if (msql_enqueuedSince == undefined) {
+      msql_enqueuedSince = Date.now();
+    }
+  });
+
+  pool.on('connection', function(connection) {
+    var queueDuration;
+    if (msql_enqueuedSince) {
+      queueDuration = msql_enqueuedSince - Date.now();
+      debug('got connection after ', queueDuration);
+      if (typeof(opt.overloadCB) == 'Function') {
+        opt.overloadCB(queueDuration);
+      }
+      msql_enqueuedSince = undefined;
+    }
+  });
+
+  // self.tooBusy can be used before accepting connections, to allow for failing early
+  // e.g.
+  // app.use(function(req,res,next) {
+  //  if (db.tooBusy(1000)) {
+  //    // fail if already waiting 1 second to get a db conn
+  //    res.status(503).send('Too Busy');
+  //  }
+  //  next();
+  // });
+  self.tooBusy = function(threshold) {
+    if (msql_enqueuedSince && msql_enqueuedSince - Date.now() > threshold) {
+      return true;
+    }
+    return false;
+  };
 
   return self;
-
 };

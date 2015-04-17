@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha -R spec ./test/test.js"
   },
   "author": "Qasim Zaidi <qasim@zaidi.me>",
   "license": "MIT",
