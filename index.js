@@ -47,7 +47,7 @@ module.exports = function (opt) {
       return;
     }
 
-    warn('creating pool with ' + opt.connections.max + ' connections ' + (new Error('Test')).stack.split('\n')[3]);
+    warn('creating pool with ' + opt.connections.max + ' connections, limit  ' + queueLimit +  (new Error('Test')).stack.split('\n')[3]);
 
     pool  = mysql.createPool({
       connectionLimit : opt.connections.max || 10,
