@@ -35,6 +35,8 @@ module.exports = function (opt) {
   var self = {};
   sql.setDialect('mysql');
   var timeout = opt.timeout || 60000;
+  var queueLimit = opt.queueLimit || 1000;
+  var enqueued = 0;
 
   if (urlOpts.protocol != 'mysql:') {
     console.error('invalid dialect ' + urlOpts.protocol + ' in ' + opt.url);
@@ -45,14 +47,16 @@ module.exports = function (opt) {
       return;
     }
 
-    warn('creating pool with ' + opt.connections.max + ' connections');
+    warn('creating pool with ' + opt.connections.max + ' connections ' + (new Error('Test')).stack.split('\n')[3]);
+
     pool  = mysql.createPool({
       connectionLimit : opt.connections.max || 10,
       host            : urlOpts.hostname,
       user            : auth[0],
       password        : auth[1],
       port            : urlOpts.port || 3306,
-      database        : urlOpts.path.substring(1)
+      database        : urlOpts.path.substring(1),
+      queueLimit      : queueLimit
     });
   };
 
@@ -200,25 +204,8 @@ module.exports = function (opt) {
   self.query = pool.query.bind(pool);
   self.getConnection = pool.getConnection.bind(pool)
 
-  var msql_enqueuedSince = undefined;
   pool.on('enqueue', function () {
-    if (msql_enqueuedSince == undefined) {
-      msql_enqueuedSince = Date.now(); // first time
-    } else {
-      warn('Waiting for available connection slot max = ' + opt.connections.max, msql_enqueuedSince);
-    }
-  });
-
-  pool.on('connection', function(connection) {
-    var queueDuration;
-    if (msql_enqueuedSince) {
-      queueDuration = Date.now() - msql_enqueuedSince;
-      warn('got connection after ', queueDuration);
-      if (typeof(opt.overloadCB) == 'Function') {
-        opt.overloadCB(queueDuration);
-      }
-      msql_enqueuedSince = undefined;
-    }
+    enqueued++;
   });
 
   // self.tooBusy can be used before accepting connections, to allow for failing early
@@ -231,11 +218,18 @@ module.exports = function (opt) {
   //  next();
   // });
   self.tooBusy = function(threshold) {
-    if (msql_enqueuedSince && msql_enqueuedSince - Date.now() > threshold) {
+    if (enqueued > threshold) {
       return true;
     }
     return false;
   };
+
+  setInterval(function() {
+    if(enqueued) {
+      warn('enqueued ' + enqueued + ' conns');
+      enqueued = 0;
+    }
+  },5000);
 
   return self;
 };
