@@ -3,7 +3,8 @@
 var mysql = require('mysql');
 var sql = require('sql');
 var url = require('url');
-var debug = require('debug')('mysequel');
+var debug = require('debug')('mysequel:info');
+var warn = require('debug')('mysequel:warn');
 
 var queryMethods = [
                      'select', 'from', 'insert', 'update',
@@ -44,7 +45,7 @@ module.exports = function (opt) {
       return;
     }
 
-    debug('creating pool with ' + opt.connections.max + ' connections');
+    warn('creating pool with ' + opt.connections.max + ' connections');
     pool  = mysql.createPool({
       connectionLimit : opt.connections.max || 10,
       host            : urlOpts.hostname,
@@ -201,17 +202,18 @@ module.exports = function (opt) {
 
   var msql_enqueuedSince = undefined;
   pool.on('enqueue', function () {
-    debug('Waiting for available connection slot max = ' + opt.connections.max, msql_enqueuedSince|0);
     if (msql_enqueuedSince == undefined) {
-      msql_enqueuedSince = Date.now();
+      msql_enqueuedSince = Date.now(); // first time
+    } else {
+      warn('Waiting for available connection slot max = ' + opt.connections.max, msql_enqueuedSince);
     }
   });
 
   pool.on('connection', function(connection) {
     var queueDuration;
     if (msql_enqueuedSince) {
-      queueDuration = msql_enqueuedSince - Date.now();
-      debug('got connection after ', queueDuration);
+      queueDuration = Date.now() - msql_enqueuedSince;
+      warn('got connection after ', queueDuration);
       if (typeof(opt.overloadCB) == 'Function') {
         opt.overloadCB(queueDuration);
       }
